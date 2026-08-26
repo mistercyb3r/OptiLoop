@@ -38,6 +38,12 @@ MODEL_PRICING: dict[str, ModelPricing] = {
         completion_cost_per_token=0.1652 / 1_000_000,   # $0.1652/M
         search_cost_per_call=0.0,
     ),
+    # Qwen 3 Coder Flash — ultra-low cost
+    "qwen/qwen3-coder-flash": ModelPricing(
+        prompt_cost_per_token=0.10 / 1_000_000,       # $0.10/M
+        completion_cost_per_token=0.10 / 1_000_000,    # $0.10/M
+        search_cost_per_call=0.0,
+    ),
     # Xiaomi MiMo v2.5
     "xiaomi/mimo-v2.5": ModelPricing(
         prompt_cost_per_token=0.14 / 1_000_000,       # $0.14/M
@@ -57,6 +63,9 @@ MODEL_PRICING: dict[str, ModelPricing] = {
         search_cost_per_call=0.0,
     ),
 }
+
+# Fallback pricing used when a model is not in MODEL_PRICING
+_FALLBACK_MODEL_ID = "openai/gpt-4o-mini"
 
 
 # ---------------------------------------------------------------------------
@@ -101,25 +110,12 @@ class CostCalculator:
     ) -> float:
         """Return the exact USD cost for the given usage.
 
-        Args:
-            model: Model identifier (e.g. ``"anthropic/claude-sonnet-4"``).
-            prompt_tokens: Number of tokens in the prompt.
-            completion_tokens: Number of tokens in the completion.
-            search_calls: Number of search / tool-calls made.
-
-        Returns:
-            Cost in USD, rounded to 6 decimal places.
-
-        Raises:
-            ValueError: If the model is not in the pricing catalogue.
+        If the model is not in the pricing catalogue, falls back to
+        the default model pricing (openai/gpt-4o-mini) instead of raising.
         """
-        if model not in self.pricing:
-            raise ValueError(
-                f"Unknown model '{model}'. "
-                f"Available models: {list(self.pricing.keys())}"
-            )
-
-        pricing = self.pricing[model]
+        pricing = self.pricing.get(model)
+        if pricing is None:
+            pricing = self.pricing.get(_FALLBACK_MODEL_ID)
 
         prompt_cost = prompt_tokens * pricing.prompt_cost_per_token
         completion_cost = completion_tokens * pricing.completion_cost_per_token

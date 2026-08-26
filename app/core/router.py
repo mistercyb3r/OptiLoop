@@ -31,6 +31,12 @@ FALLBACK_MODELS: dict[str, dict[str, Any]] = {
         "context_length": 1_048_576,
         "max_completion_tokens": 8192,
     },
+    "qwen/qwen3-coder-flash": {
+        "prompt_price_per_token": 0.10 / 1_000_000,
+        "completion_price_per_token": 0.10 / 1_000_000,
+        "context_length": 131_072,
+        "max_completion_tokens": 8192,
+    },
     "xiaomi/mimo-v2.5": {
         "prompt_price_per_token": 0.14 / 1_000_000,
         "completion_price_per_token": 0.56 / 1_000_000,
@@ -51,8 +57,8 @@ FALLBACK_MODELS: dict[str, dict[str, Any]] = {
     },
 }
 
-_TIER1_MODELS = {"deepseek/deepseek-v4-flash", "openai/gpt-4o-mini"}
-_TIER2_MODELS = {"deepseek/deepseek-v4-flash", "xiaomi/mimo-v2.5"}
+_TIER1_MODELS = {"deepseek/deepseek-v4-flash", "openai/gpt-4o-mini", "qwen/qwen3-coder-flash"}
+_TIER2_MODELS = {"deepseek/deepseek-chat", "xiaomi/mimo-v2.5", "qwen/qwen3-coder-flash"}
 _TIER3_MODELS = {"xiaomi/mimo-v2.5", "anthropic/claude-sonnet-4"}
 
 # Verified fallback model used when any model returns 404 or errors
@@ -69,6 +75,7 @@ AVAILABLE_MODELS = [
     {"id": "openai/gpt-4o-mini", "label": "GPT-4o Mini", "tier": "cheap"},
     {"id": "deepseek/deepseek-chat", "label": "DeepSeek Chat", "tier": "mid"},
     {"id": "deepseek/deepseek-v4-flash", "label": "DeepSeek V4 Flash", "tier": "cheap"},
+    {"id": "qwen/qwen3-coder-flash", "label": "Qwen3 Coder Flash", "tier": "cheap"},
     {"id": "xiaomi/mimo-v2.5", "label": "Xiaomi MiMo v2.5", "tier": "mid"},
     {"id": "anthropic/claude-sonnet-4", "label": "Claude Sonnet 4", "tier": "high"},
     {"id": "openai/gpt-4o", "label": "GPT-4o", "tier": "high"},
@@ -183,11 +190,11 @@ class ModelRouter:
                      target_budget_usd=0.0, total_spent_usd=0.0):
         """Pick the best model for the given agent role and constraints.
 
-        - Planner defaults to Tier 3.
-        - Executor defaults to Tier 2 (Tier 3 if complexity=high).
-        - Reviewer defaults to Tier 2 (Tier 3 if complexity=high).
-        - Budget guard: if >=80% spent, forces Tier 1 regardless of role.
+        Only returns models that exist in MODEL_PRICING to prevent
+        'Unknown model' errors downstream.
         """
+        from app.core.cost_calculator import MODEL_PRICING
+
         tiers = self._tiers()
 
         if target_budget_usd > 0:
@@ -209,7 +216,15 @@ class ModelRouter:
                     break
         if not candidates:
             raise RuntimeError("No models available in any tier")
-        return candidates[0]
+
+        # Filter to only models with known pricing
+        priced = [m for m in candidates if m in MODEL_PRICING]
+        if priced:
+            return priced[0]
+
+        # Last resort: return the hardcoded fallback
+        logger.warning("No priced models in tier %s, using fallback", tier_key)
+        return _FALLBACK_MODEL
 
     @staticmethod
     def _role_default_tier(agent_role, complexity):

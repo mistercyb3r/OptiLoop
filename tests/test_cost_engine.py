@@ -130,9 +130,11 @@ class TestCostCalculation:
         # 10 * $0.003 = $0.03
         assert cost == pytest.approx(0.03, abs=1e-6)
 
-    def test_unknown_model_raises(self, calculator):
-        with pytest.raises(ValueError, match="Unknown model"):
-            calculator.calculate_cost("nonexistent/model", 1000, 500)
+    def test_unknown_model_uses_fallback_pricing(self, calculator):
+        """Unknown models fall back to gpt-4o-mini pricing instead of raising."""
+        cost = calculator.calculate_cost("nonexistent/model", 1000, 500)
+        # Same cost as gpt-4o-mini: 1000*$0.15/M + 500*$0.60/M = $0.00045
+        assert cost == pytest.approx(0.00045, abs=1e-6)
 
     def test_cost_rounded_six_decimals(self, calculator):
         cost = calculator.calculate_cost(
@@ -170,8 +172,9 @@ class TestHelpers:
 
     def test_available_models(self, calculator):
         models = calculator.available_models()
-        assert len(models) == 5
+        assert len(models) == 6
         assert "anthropic/claude-sonnet-4" in models
+        assert "qwen/qwen3-coder-flash" in models
 
     def test_custom_pricing(self):
         custom = {"m": ModelPricing(1.0 / 1e6, 2.0 / 1e6, 0.0)}
