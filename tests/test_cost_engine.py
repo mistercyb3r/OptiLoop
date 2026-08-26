@@ -172,7 +172,7 @@ class TestHelpers:
 
     def test_available_models(self, calculator):
         models = calculator.available_models()
-        assert len(models) == 6
+        assert len(models) == 7
         assert "anthropic/claude-3.5-sonnet" in models
         assert "qwen/qwen-2.5-coder-32b-instruct" in models
 

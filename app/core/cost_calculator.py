@@ -62,6 +62,12 @@ MODEL_PRICING: dict[str, ModelPricing] = {
         completion_cost_per_token=0.60 / 1_000_000,    # $0.60/M
         search_cost_per_call=0.0,
     ),
+    # OpenAI GPT-4o
+    "openai/gpt-4o": ModelPricing(
+        prompt_cost_per_token=2.50 / 1_000_000,       # $2.50/M
+        completion_cost_per_token=10.00 / 1_000_000,   # $10.00/M
+        search_cost_per_call=0.0,
+    ),
 }
 
 # Fallback pricing used when a model is not in MODEL_PRICING
@@ -116,6 +122,8 @@ class CostCalculator:
         pricing = self.pricing.get(model)
         if pricing is None:
             pricing = self.pricing.get(_FALLBACK_MODEL_ID)
+        if pricing is None:
+            raise ValueError(f"No pricing for model {model!r} and fallback unavailable")
 
         prompt_cost = prompt_tokens * pricing.prompt_cost_per_token
         completion_cost = completion_tokens * pricing.completion_cost_per_token

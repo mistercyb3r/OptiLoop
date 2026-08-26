@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from sqlmodel import Session
@@ -22,30 +23,16 @@ logger = logging.getLogger(__name__)
 _MAX_TOKENS_DEFAULT = 4096
 
 
-def clean_json_response(text: str) -> str:
-    """Strip markdown code fences and leading/trailing whitespace from LLM output.
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
-    Handles responses like:
-        ```json
-        {"key": "value"}
-        ```
-    or:
-        ```{"key": "value"}```
-    """
+
+def clean_json_response(text: str) -> str:
+    """Strip markdown code fences from LLM output using regex."""
     text = text.strip()
-    # Remove leading ```json or ``` markers
-    if text.startswith("```"):
-        # Find end of first line (the opening fence)
-        first_newline = text.find("\n")
-        if first_newline != -1:
-            text = text[first_newline + 1:]
-        else:
-            # Entire text is just a fence with content on same line
-            text = text[3:]
-    # Remove trailing ``` marker
-    if text.endswith("```"):
-        text = text[:-3]
-    return text.strip()
+    m = _FENCE_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    return text
 
 
 def _parse_json(text: str) -> dict:

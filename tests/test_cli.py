@@ -22,12 +22,14 @@ MOCK_TASK_SUMMARY = {
     "status": "completed",
     "target_budget_usd": 1.50,
     "total_spent_usd": 0.025,
+    "model_used": "openai/gpt-4o-mini",
     "created_at": "2025-01-15T10:00:00",
     "updated_at": "2025-01-15T10:05:00",
 }
 
 MOCK_TASK_DETAIL = {
     **MOCK_TASK_SUMMARY,
+    "model_used": "openai/gpt-4o-mini",
     "total_prompt_tokens": 5000,
     "total_completion_tokens": 2000,
     "agent_runs": [
@@ -173,9 +175,9 @@ class TestMetrics:
         with patch("cli.main.httpx.get", _mock_get("/api/tasks/abc-123")):
             result = runner.invoke(app, ["metrics", "abc-123"])
         assert result.exit_code == 0
-        assert "Planner" in result.output
-        assert "Executor" in result.output
-        assert "Reviewer" in result.output
+        assert "Architect" in result.output
+        assert "Developer" in result.output
+        assert "Inspector" in result.output
         assert "Total" in result.output
         assert "$" in result.output
 

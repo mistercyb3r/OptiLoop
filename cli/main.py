@@ -1,9 +1,10 @@
-"""OptiLoop CLI - Terminal interface for the Autonomous Multi-Agent Coding System."""
+"""OptiLoop CLI - Professional terminal interface."""
 from __future__ import annotations
 
 import json
 import os
 import sys
+import time
 from typing import Optional
 
 import httpx
@@ -12,6 +13,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
+from rich.status import Status
 
 app = typer.Typer(name="optiloop", help="OptiLoop - Autonomous Multi-Agent Coding System CLI")
 console = Console()
@@ -20,7 +22,7 @@ API_URL = os.getenv("OPTILOOP_API_URL", "http://localhost:8000")
 
 
 def _get(path: str) -> dict:
-    """GET request to the API. Raises typer.Exit on error."""
+    """GET request to the API."""
     try:
         resp = httpx.get(f"{API_URL}{path}", timeout=10)
         resp.raise_for_status()
@@ -29,15 +31,12 @@ def _get(path: str) -> dict:
         console.print("[red]Error:[/] Cannot connect to OptiLoop API at " + API_URL)
         raise typer.Exit(1)
     except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            console.print(f"[red]Error:[/] Resource not found: {path}")
-        else:
-            console.print(f"[red]Error:[/] HTTP {e.response.status_code}")
+        console.print(f"[red]Error:[/] HTTP {e.response.status_code}")
         raise typer.Exit(1)
 
 
 def _post(path: str, body: dict = None) -> dict:
-    """POST request to the API. Raises typer.Exit on error."""
+    """POST request to the API."""
     try:
         resp = httpx.post(f"{API_URL}{path}", json=body or {}, timeout=10)
         resp.raise_for_status()
@@ -46,109 +45,101 @@ def _post(path: str, body: dict = None) -> dict:
         console.print("[red]Error:[/] Cannot connect to OptiLoop API at " + API_URL)
         raise typer.Exit(1)
     except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            console.print(f"[red]Error:[/] Resource not found: {path}")
-        else:
-            console.print(f"[red]Error:[/] HTTP {e.response.status_code}")
+        console.print(f"[red]Error:[/] HTTP {e.response.status_code}")
         raise typer.Exit(1)
 
 
-# ---------------------------------------------------------------------------
-# submit
-# ---------------------------------------------------------------------------
+ROLE_BADGES = {
+    "planner": "[bold blue]Architect[/]",
+    "executor": "[bold green]Developer[/]",
+    "reviewer": "[bold yellow]Inspector[/]",
+}
+
+
 
 @app.command()
 def submit(
     prompt: str = typer.Argument(..., help="Task description / coding prompt"),
     budget: float = typer.Option(0.50, "--budget", "-b", help="Budget in USD"),
+    model: str = typer.Option("auto", "--model", "-m", help="Model ID or 'auto'"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Stream logs after submit"),
 ):
     """Submit a new task to OptiLoop."""
-    data = _post("/api/tasks", {"prompt": prompt, "target_budget_usd": budget})
+    with Status("[cyan]Routing task...[/]", console=console, spinner="dots"):
+        data = _post("/api/tasks", {
+            "prompt": prompt, "target_budget_usd": budget, "model": model,
+        })
+    task_id = data["id"]
+    panel = Text()
+    panel.append("Task ID:   ", style="bold")
+    panel.append(f"{task_id}\n", style="cyan")
+    panel.append("Status:    ", style="bold")
+    panel.append(f"{data['status']}\n", style="green")
+    panel.append("Prompt:    ", style="bold")
+    panel.append(f"{data['prompt']}\n")
+    panel.append("Budget:    ", style="bold")
+    panel.append(f"${data['target_budget_usd']:.2f}\n", style="yellow")
+    panel.append("Model:     ", style="bold")
+    panel.append(f"{model}", style="cyan")
+    console.print(Panel(panel, title="[bold green]Task Submitted[/]", border_style="green"))
+    if follow:
+        console.print(f"\n[dim]Streaming logs for {task_id}...[/]\n")
+        _stream_logs(task_id)
 
-    panel_content = Text()
-    panel_content.append(f"Task ID:   ", style="bold")
-    panel_content.append(f"{data['id']}\n", style="cyan")
-    panel_content.append(f"Status:    ", style="bold")
-    panel_content.append(f"{data['status']}\n", style="green")
-    panel_content.append(f"Prompt:    ", style="bold")
-    panel_content.append(f"{data['prompt']}\n")
-    panel_content.append(f"Budget:    ", style="bold")
-    panel_content.append(f"${data['target_budget_usd']:.2f}", style="yellow")
-
-    console.print(Panel(panel_content, title="[bold green]Task Submitted[/]", border_style="green"))
-
-
-# ---------------------------------------------------------------------------
-# status
-# ---------------------------------------------------------------------------
 
 @app.command()
 def status(task_id: str = typer.Argument(..., help="Task ID to check")):
     """Show detailed status of a task."""
-    data = _get(f"/api/tasks/{task_id}")
+    with Status("Fetching status...", console=console, spinner="dots"):
+        data = _get(f"/api/tasks/{task_id}")
+    t = Table(title=f"Task {task_id[:12]}...", show_header=True, header_style="bold")
+    t.add_column("Field", style="dim"); t.add_column("Value")
+    ss = {"completed":"green","running":"blue","failed":"red","cancelled":"yellow","pending":"dim"}.get(data["status"],"white")
+    t.add_row("Status", f"[{ss}]{data['status']}[/]")
+    t.add_row("Prompt", data["prompt"][:80])
+    t.add_row("Model Used", data.get("model_used","") or "auto")
+    t.add_row("Total Spent", f"${data['total_spent_usd']:.6f}")
+    t.add_row("Target Budget", f"${data['target_budget_usd']:.2f}" if data.get("target_budget_usd") else "None")
+    t.add_row("Input Cost", f"${data.get('total_input_cost',0):.6f}")
+    t.add_row("Output Cost", f"${data.get('total_output_cost',0):.6f}")
+    t.add_row("Input Tokens", f"{data.get('total_prompt_tokens',0):,}")
+    t.add_row("Output Tokens", f"{data.get('total_completion_tokens',0):,}")
+    t.add_row("Agent Runs", str(len(data.get("agent_runs",[]))))
+    t.add_row("Execution Logs", str(len(data.get("execution_logs",[]))))
+    console.print(t)
 
-    table = Table(title=f"Task {data['id']}", show_header=True, header_style="bold")
-    table.add_column("Field", style="dim")
-    table.add_column("Value")
-
-    status_style = {
-        "completed": "green", "running": "blue", "failed": "red",
-        "cancelled": "yellow", "pending": "dim",
-    }.get(data["status"], "white")
-
-    table.add_row("Status", f"[{status_style}]{data['status']}[/]")
-    table.add_row("Prompt", data["prompt"][:80])
-    table.add_row("Total Spent", f"${data['total_spent_usd']:.6f}")
-    table.add_row("Target Budget", f"${data['target_budget_usd']:.2f}" if data.get("target_budget_usd") else "None")
-    table.add_row("Prompt Tokens", f"{data['total_prompt_tokens']:,}")
-    table.add_row("Completion Tokens", f"{data['total_completion_tokens']:,}")
-    table.add_row("Agent Runs", str(len(data.get("agent_runs", []))))
-    table.add_row("Execution Logs", str(len(data.get("execution_logs", []))))
-    table.add_row("Created", data["created_at"][:19])
-    table.add_row("Updated", data["updated_at"][:19])
-
-    console.print(table)
-
-
-# ---------------------------------------------------------------------------
-# logs
-# ---------------------------------------------------------------------------
 
 @app.command()
-def logs(
-    task_id: str = typer.Argument(..., help="Task ID"),
-    follow: bool = typer.Option(False, "--follow", "-f", help="Stream live logs via SSE"),
-):
+def logs(task_id: str = typer.Argument(..., help="Task ID"),
+         follow: bool = typer.Option(False, "--follow", "-f", help="Stream live logs via SSE")):
     """Display execution logs for a task."""
     if follow:
         _stream_logs(task_id)
     else:
         data = _get(f"/api/tasks/{task_id}")
-        log_entries = data.get("execution_logs", [])
-        if not log_entries:
+        logs_list = data.get("execution_logs", [])
+        if not logs_list:
             console.print("[dim]No logs found for this task.[/]")
             return
-        for entry in log_entries:
+        for entry in logs_list:
             ts = entry["timestamp"][:19] if entry.get("timestamp") else ""
             step = entry.get("step_type", "???")
             content = entry.get("content", "")
             console.print(f"[dim]{ts}[/] [{_step_color(step)}]{step:>10}[/] {content[:500]}")
 
 
-def _step_color(step_type: str) -> str:
-    return {"command": "cyan", "diff": "yellow", "reasoning": "magenta",
-            "search": "blue"}.get(step_type, "white")
+def _step_color(step_type):
+    return {"command":"cyan","diff":"yellow","reasoning":"magenta","search":"blue"}.get(step_type,"white")
 
 
-def _stream_logs(task_id: str):
-    """Connect to SSE endpoint and stream logs to terminal."""
+
+def _stream_logs(task_id):
     console.print(f"[dim]Streaming logs for {task_id} (Ctrl+C to stop)...[/]")
     url = f"{API_URL}/api/tasks/{task_id}/stream"
     try:
         with httpx.stream("GET", url, timeout=300) as resp:
             resp.raise_for_status()
-            event_type = None
-            data_lines = []
+            event_type = None; data_lines = []
             for line in resp.iter_lines():
                 if line.startswith("event:"):
                     event_type = line.split(":", 1)[1].strip()
@@ -159,97 +150,60 @@ def _stream_logs(task_id: str):
                     if event_type == "log":
                         try:
                             obj = json.loads(raw)
-                            ts = obj.get("timestamp", "")[:19]
-                            step = obj.get("step_type", "???")
-                            content = obj.get("content", "")
+                            ts = obj.get("timestamp","")[:19]
+                            step = obj.get("step_type","???")
+                            content = obj.get("content","")
                             console.print(f"[dim]{ts}[/] [{_step_color(step)}]{step:>10}[/] {content[:500]}")
                         except json.JSONDecodeError:
                             console.print(raw)
                     elif event_type == "done":
-                        console.print("[dim]Stream ended.[/]")
-                        return
-                    event_type = None
-                    data_lines = []
+                        console.print("[dim]Stream ended.[/]"); return
+                    event_type = None; data_lines = []
     except httpx.ConnectError:
-        console.print("[red]Error:[/] Cannot connect to API")
-        raise typer.Exit(1)
+        console.print("[red]Error:[/] Cannot connect to API"); raise typer.Exit(1)
     except KeyboardInterrupt:
-        console.print("[dim]Stopped.[/]")
+        console.print("[dim]Stopped. [/]")
 
-
-# ---------------------------------------------------------------------------
-# metrics
-# ---------------------------------------------------------------------------
 
 @app.command()
 def metrics(task_id: str = typer.Argument(..., help="Task ID")):
-    """Display cost and token metrics per agent role."""
-    data = _get(f"/api/tasks/{task_id}")
-
-    # Aggregate by role via agent_runs -> cost_metrics
+    """Display cost and token metrics per agent role and model."""
+    with Status("Fetching metrics...", console=console, spinner="dots"):
+        data = _get(f"/api/tasks/{task_id}")
     runs = data.get("agent_runs", [])
-    all_metrics = data.get("cost_metrics", [])
-
-    role_stats: dict[str, dict] = {}
+    role_stats = {}
     for run in runs:
-        role = run.get("agent_role", "unknown")
-        if role not in role_stats:
-            role_stats[role] = {"tokens": 0, "cost": 0.0, "runs": 0}
+        role = run.get("agent_role","unknown")
+        role_stats.setdefault(role, {"runs": 0})
         role_stats[role]["runs"] += 1
 
-    # Since cost_metrics aren't linked to roles in the API response,
-    # distribute evenly across runs for display
-    total_cost = data.get("total_spent_usd", 0)
-    total_pt = data.get("total_prompt_tokens", 0)
-    total_ct = data.get("total_completion_tokens", 0)
+    breakdown = data.get("token_breakdown", [])
+    mt = Table(title="Token & Cost Breakdown by Model", show_header=True, header_style="bold")
+    mt.add_column("Model", style="bold"); mt.add_column("Prompt Tokens", justify="right")
+    mt.add_column("Completion Tokens", justify="right"); mt.add_column("Input Cost", justify="right")
+    mt.add_column("Output Cost", justify="right"); mt.add_column("Total", justify="right", style="yellow")
+    for b in breakdown:
+        mt.add_row(b["model_name"].split("/")[-1], f"{b['prompt_tokens']:,}",
+                   f"{b['completion_tokens']:,}", f"${b['prompt_cost_usd']:.6f}",
+                   f"${b['completion_cost_usd']:.6f}", f"${b['total_cost_usd']:.6f}")
+    ti = data.get("total_input_cost", 0); to = data.get("total_output_cost", 0)
+    mt.add_section()
+    mt.add_row("[bold]Total[/]", "", f"[bold]{data.get('total_prompt_tokens',0):,}[/]",
+               f"[bold]{data.get('total_completion_tokens',0):,}[/]",
+               f"[bold]${ti:.6f}[/]", f"[bold]${to:.6f}[/]", f"[bold]${ti+to:.6f}[/]")
 
-    if role_stats:
-        per_role_cost = total_cost / len(role_stats) if role_stats else 0
-        per_role_pt = total_pt // len(role_stats) if role_stats else 0
-        per_role_ct = total_ct // len(role_stats) if role_stats else 0
-        for role in role_stats:
-            role_stats[role]["cost"] = per_role_cost
-            role_stats[role]["prompt_tokens"] = per_role_pt
-            role_stats[role]["completion_tokens"] = per_role_ct
+    rt = Table(title="Agent Run Summary", show_header=True, header_style="bold")
+    rt.add_column("Role", style="bold"); rt.add_column("Runs", justify="right")
+    for role in ["planner","executor","reviewer"]:
+        badge = ROLE_BADGES.get(role, role)
+        rt.add_row(badge, str(role_stats.get(role,{}).get("runs",0)))
+    console.print(mt); console.print(rt)
 
-    table = Table(title=f"Metrics - Task {task_id[:12]}...", show_header=True, header_style="bold")
-    table.add_column("Role", style="bold")
-    table.add_column("Runs", justify="right")
-    table.add_column("Prompt Tokens", justify="right")
-    table.add_column("Completion Tokens", justify="right")
-    table.add_column("Cost (USD)", justify="right", style="yellow")
-
-    for role in ["planner", "executor", "reviewer"]:
-        if role in role_stats:
-            s_data = role_stats[role]
-            table.add_row(
-                role.capitalize(),
-                str(s_data["runs"]),
-                f"{s_data.get('prompt_tokens', 0):,}",
-                f"{s_data.get('completion_tokens', 0):,}",
-                f"${s_data['cost']:.6f}",
-            )
-
-    table.add_section()
-    table.add_row(
-        "[bold]Total[/]", "", f"[bold]{total_pt:,}[/]",
-        f"[bold]{total_ct:,}[/]", f"[bold]${total_cost:.6f}[/]",
-    )
-
-    console.print(table)
-
-
-# ---------------------------------------------------------------------------
-# stop
-# ---------------------------------------------------------------------------
 
 @app.command()
 def stop(task_id: str = typer.Argument(..., help="Task ID to cancel")):
     """Stop / cancel a running task."""
     data = _post(f"/api/tasks/{task_id}/stop")
-    status = data.get("status", "unknown")
-    console.print(Panel(
-        f"Task [cyan]{task_id}[/] has been [yellow]{status}[/].",
-        title="[bold yellow]Task Stopped[/]",
-        border_style="yellow",
-    ))
+    s = data.get("status","unknown")
+    console.print(Panel(f"Task [cyan]{task_id}[/] has been [yellow]{s}[/].",
+                        title="[bold yellow]Task Stopped[/]", border_style="yellow"))

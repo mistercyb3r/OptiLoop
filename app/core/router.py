@@ -55,11 +55,17 @@ FALLBACK_MODELS: dict[str, dict[str, Any]] = {
         "context_length": 128_000,
         "max_completion_tokens": 16384,
     },
+    "openai/gpt-4o": {
+        "prompt_price_per_token": 2.50 / 1_000_000,
+        "completion_price_per_token": 10.00 / 1_000_000,
+        "context_length": 128_000,
+        "max_completion_tokens": 16384,
+    },
 }
 
 _TIER1_MODELS = {"deepseek/deepseek-v4-flash", "openai/gpt-4o-mini", "qwen/qwen-2.5-coder-32b-instruct"}
-_TIER2_MODELS = {"deepseek/deepseek-chat", "xiaomi/mimo-v2.5", "qwen/qwen-2.5-coder-32b-instruct"}
-_TIER3_MODELS = {"xiaomi/mimo-v2.5", "anthropic/claude-3.5-sonnet"}
+_TIER2_MODELS = {"deepseek/deepseek-chat", "openai/gpt-4o-mini", "qwen/qwen-2.5-coder-32b-instruct"}
+_TIER3_MODELS = {"anthropic/claude-3.5-sonnet", "openai/gpt-4o"}
 
 # Verified fallback model used when any model returns 404 or errors
 DEFAULT_PLANNER_MODEL = "anthropic/claude-3.5-sonnet"
@@ -75,9 +81,9 @@ AVAILABLE_MODELS = [
     {"id": "openai/gpt-4o-mini", "label": "GPT-4o Mini", "tier": "cheap"},
     {"id": "deepseek/deepseek-chat", "label": "DeepSeek Chat", "tier": "mid"},
     {"id": "deepseek/deepseek-v4-flash", "label": "DeepSeek V4 Flash", "tier": "cheap"},
-    {"id": "qwen/qwen-2.5-coder-32b-instruct", "label": "Qwen3 Coder Flash", "tier": "cheap"},
+    {"id": "qwen/qwen-2.5-coder-32b-instruct", "label": "Qwen 2.5 Coder 32B", "tier": "cheap"},
     {"id": "xiaomi/mimo-v2.5", "label": "Xiaomi MiMo v2.5", "tier": "mid"},
-    {"id": "anthropic/claude-3.5-sonnet", "label": "Claude Sonnet 4", "tier": "high"},
+    {"id": "anthropic/claude-3.5-sonnet", "label": "Claude 3.5 Sonnet", "tier": "high"},
     {"id": "openai/gpt-4o", "label": "GPT-4o", "tier": "high"},
 ]
 
