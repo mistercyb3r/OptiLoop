@@ -3,7 +3,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import PixelOffice from "@/components/PixelOffice";
 
-const API = "http://localhost:8000/api";
+// In Docker / production: use NEXT_PUBLIC_API_URL (set via env var).
+// In local dev or when unset: fall back to current hostname on port 8050.
+const API = typeof window !== "undefined"
+  ? (process.env.NEXT_PUBLIC_API_URL || `http://${window.location.hostname}:8050/api`)
+  : "http://localhost:8050/api";
 
 interface TaskSummary {
   id: string;
