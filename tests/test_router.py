@@ -101,7 +101,7 @@ class TestTiers:
         assert "deepseek/deepseek-v4-flash" in tiers["1"]
         assert "openai/gpt-4o-mini" in tiers["1"]
         assert "xiaomi/mimo-v2.5" in tiers["2"]
-        assert "anthropic/claude-sonnet-4" in tiers["3"]
+        assert "anthropic/claude-3.5-sonnet" in tiers["3"]
 
     def test_dynamic_tiers_from_custom_catalogue(self):
         r = ModelRouter()

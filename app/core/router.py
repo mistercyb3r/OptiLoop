@@ -31,7 +31,7 @@ FALLBACK_MODELS: dict[str, dict[str, Any]] = {
         "context_length": 1_048_576,
         "max_completion_tokens": 8192,
     },
-    "qwen/qwen3-coder-flash": {
+    "qwen/qwen-2.5-coder-32b-instruct": {
         "prompt_price_per_token": 0.10 / 1_000_000,
         "completion_price_per_token": 0.10 / 1_000_000,
         "context_length": 131_072,
@@ -43,7 +43,7 @@ FALLBACK_MODELS: dict[str, dict[str, Any]] = {
         "context_length": 128_000,
         "max_completion_tokens": 8192,
     },
-    "anthropic/claude-sonnet-4": {
+    "anthropic/claude-3.5-sonnet": {
         "prompt_price_per_token": 3.00 / 1_000_000,
         "completion_price_per_token": 15.00 / 1_000_000,
         "context_length": 200_000,
@@ -57,12 +57,12 @@ FALLBACK_MODELS: dict[str, dict[str, Any]] = {
     },
 }
 
-_TIER1_MODELS = {"deepseek/deepseek-v4-flash", "openai/gpt-4o-mini", "qwen/qwen3-coder-flash"}
-_TIER2_MODELS = {"deepseek/deepseek-chat", "xiaomi/mimo-v2.5", "qwen/qwen3-coder-flash"}
-_TIER3_MODELS = {"xiaomi/mimo-v2.5", "anthropic/claude-sonnet-4"}
+_TIER1_MODELS = {"deepseek/deepseek-v4-flash", "openai/gpt-4o-mini", "qwen/qwen-2.5-coder-32b-instruct"}
+_TIER2_MODELS = {"deepseek/deepseek-chat", "xiaomi/mimo-v2.5", "qwen/qwen-2.5-coder-32b-instruct"}
+_TIER3_MODELS = {"xiaomi/mimo-v2.5", "anthropic/claude-3.5-sonnet"}
 
 # Verified fallback model used when any model returns 404 or errors
-DEFAULT_PLANNER_MODEL = "anthropic/claude-sonnet-4"
+DEFAULT_PLANNER_MODEL = "anthropic/claude-3.5-sonnet"
 DEFAULT_EXECUTOR_MODEL = "deepseek/deepseek-chat"
 DEFAULT_REVIEWER_MODEL = "deepseek/deepseek-chat"
 
@@ -75,9 +75,9 @@ AVAILABLE_MODELS = [
     {"id": "openai/gpt-4o-mini", "label": "GPT-4o Mini", "tier": "cheap"},
     {"id": "deepseek/deepseek-chat", "label": "DeepSeek Chat", "tier": "mid"},
     {"id": "deepseek/deepseek-v4-flash", "label": "DeepSeek V4 Flash", "tier": "cheap"},
-    {"id": "qwen/qwen3-coder-flash", "label": "Qwen3 Coder Flash", "tier": "cheap"},
+    {"id": "qwen/qwen-2.5-coder-32b-instruct", "label": "Qwen3 Coder Flash", "tier": "cheap"},
     {"id": "xiaomi/mimo-v2.5", "label": "Xiaomi MiMo v2.5", "tier": "mid"},
-    {"id": "anthropic/claude-sonnet-4", "label": "Claude Sonnet 4", "tier": "high"},
+    {"id": "anthropic/claude-3.5-sonnet", "label": "Claude Sonnet 4", "tier": "high"},
     {"id": "openai/gpt-4o", "label": "GPT-4o", "tier": "high"},
 ]
 
@@ -173,16 +173,18 @@ class ModelRouter:
         }
 
     def _tiers(self):
-        """Return tiers: canonical for known models, dynamic otherwise."""
-        cat = self.get_catalogue()
-        known = set(cat.keys())
-        if known == set(FALLBACK_MODELS.keys()):
-            return {
-                "1": sorted(_TIER1_MODELS & known),
-                "2": sorted(_TIER2_MODELS & known),
-                "3": sorted(_TIER3_MODELS & known),
-            }
-        return self.classify_tiers()
+        """Return tiers: always use canonical assignments for known models,
+        fall back to dynamic classification only for truly unknown catalogues."""
+        from app.core.cost_calculator import MODEL_PRICING
+
+        # Always use canonical tiers — they are intersectioned with MODEL_PRICING
+        # in select_model(), so unpriced models are safely excluded.
+        known_priced = set(FALLBACK_MODELS.keys()) & set(MODEL_PRICING.keys())
+        return {
+            "1": sorted(_TIER1_MODELS & known_priced),
+            "2": sorted(_TIER2_MODELS & known_priced),
+            "3": sorted(_TIER3_MODELS & known_priced),
+        }
 
     # -- Model selection ----------------------------------------------------
 

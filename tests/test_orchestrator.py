@@ -9,7 +9,7 @@ import pytest
 from sqlmodel import SQLModel, Session, create_engine
 
 from app.models.db_models import Task, AgentRun, CostMetric, ExecutionLog
-from app.core.orchestrator import Orchestrator, _parse_json
+from app.core.orchestrator import Orchestrator, _parse_json, clean_json_response
 from app.core.router import ModelRouter
 from app.core.cost_calculator import CostCalculator
 from app.core.sandbox import DockerSandbox
@@ -136,6 +136,38 @@ class TestParseJson:
 
     def test_garbage_returns_empty(self):
         assert _parse_json("not json at all") == {}
+
+
+class TestCleanJsonResponse:
+
+    def test_clean_plain_json(self):
+        assert clean_json_response('{"a": 1}') == '{"a": 1}'
+
+    def test_clean_fenced_json(self):
+        text = '```json\n{"key": "value"}\n```'
+        assert clean_json_response(text) == '{"key": "value"}'
+
+    def test_clean_fence_with_text_before(self):
+        """Text before fences stays; clean_json_response only strips start/end fences.
+        _parse_json handles full extraction via JSON boundary detection."""
+        text = 'Here is the plan:\n```json\n{"steps": []}\n```'
+        cleaned = clean_json_response(text)
+        # The closing ``` at the end gets stripped
+        assert cleaned.endswith('{"steps": []}')
+        # _parse_json extracts the JSON
+        assert _parse_json(text) == {"steps": []}
+
+    def test_clean_inline_fence(self):
+        text = '```{"x": 1}```'
+        assert clean_json_response(text) == '{"x": 1}'
+
+    def test_clean_only_fences(self):
+        text = '```json\n```'
+        assert clean_json_response(text) == ''
+
+    def test_clean_whitespace_around(self):
+        text = '  \n  {"a": 1}  \n  '
+        assert clean_json_response(text) == '{"a": 1}'
 
 
 # ---------------------------------------------------------------------------

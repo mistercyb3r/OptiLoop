@@ -54,7 +54,7 @@ class TestDatabaseInitialization:
         session.commit()
         session.refresh(task)
         run = AgentRun(task_id=task.id, agent_role="executor",
-                       model_name="anthropic/claude-sonnet-4", iteration=1)
+                       model_name="anthropic/claude-3.5-sonnet", iteration=1)
         session.add(run)
         session.commit()
         session.refresh(run)
@@ -110,7 +110,7 @@ class TestCostCalculation:
 
     def test_claude_sonnet_4(self, calculator):
         cost = calculator.calculate_cost(
-            "anthropic/claude-sonnet-4", 5000, 2000
+            "anthropic/claude-3.5-sonnet", 5000, 2000
         )
         # 5000*$3/M + 2000*$15/M = $0.015 + $0.03 = $0.045
         assert cost == pytest.approx(0.045, abs=1e-6)
@@ -173,8 +173,8 @@ class TestHelpers:
     def test_available_models(self, calculator):
         models = calculator.available_models()
         assert len(models) == 6
-        assert "anthropic/claude-sonnet-4" in models
-        assert "qwen/qwen3-coder-flash" in models
+        assert "anthropic/claude-3.5-sonnet" in models
+        assert "qwen/qwen-2.5-coder-32b-instruct" in models
 
     def test_custom_pricing(self):
         custom = {"m": ModelPricing(1.0 / 1e6, 2.0 / 1e6, 0.0)}
@@ -192,17 +192,17 @@ class TestIntegration:
 
         run = AgentRun(
             task_id=task.id, agent_role="executor",
-            model_name="anthropic/claude-sonnet-4",
+            model_name="anthropic/claude-3.5-sonnet",
         )
         session.add(run)
         session.commit()
         session.refresh(run)
 
         cost = calculator.calculate_cost(
-            "anthropic/claude-sonnet-4", 5000, 2000
+            "anthropic/claude-3.5-sonnet", 5000, 2000
         )
         metric = CostMetric(
-            agent_run_id=run.id, model_name="anthropic/claude-sonnet-4",
+            agent_run_id=run.id, model_name="anthropic/claude-3.5-sonnet",
             prompt_tokens=5000, completion_tokens=2000,
             search_calls=0, cost_usd=cost,
         )

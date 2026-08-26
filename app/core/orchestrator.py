@@ -22,24 +22,47 @@ logger = logging.getLogger(__name__)
 _MAX_TOKENS_DEFAULT = 4096
 
 
+def clean_json_response(text: str) -> str:
+    """Strip markdown code fences and leading/trailing whitespace from LLM output.
+
+    Handles responses like:
+        ```json
+        {"key": "value"}
+        ```
+    or:
+        ```{"key": "value"}```
+    """
+    text = text.strip()
+    # Remove leading ```json or ``` markers
+    if text.startswith("```"):
+        # Find end of first line (the opening fence)
+        first_newline = text.find("\n")
+        if first_newline != -1:
+            text = text[first_newline + 1:]
+        else:
+            # Entire text is just a fence with content on same line
+            text = text[3:]
+    # Remove trailing ``` marker
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
+
 def _parse_json(text: str) -> dict:
     """Best-effort extraction of a JSON object from LLM text output."""
-    text = text.strip()
-    # Try direct parse first
+    cleaned = clean_json_response(text)
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
         pass
-    # Try extracting from markdown code block
-    for marker in ("```json", "```"):
-        if marker in text:
-            start = text.index(marker) + len(marker)
-            end = text.rfind("```")
-            if end > start:
-                try:
-                    return json.loads(text[start:end].strip())
-                except json.JSONDecodeError:
-                    pass
+    # Fallback: try to find JSON object boundaries
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(cleaned[start:end + 1])
+        except (json.JSONDecodeError, ValueError):
+            pass
     return {}
 
 

@@ -39,7 +39,7 @@ MODEL_PRICING: dict[str, ModelPricing] = {
         search_cost_per_call=0.0,
     ),
     # Qwen 3 Coder Flash — ultra-low cost
-    "qwen/qwen3-coder-flash": ModelPricing(
+    "qwen/qwen-2.5-coder-32b-instruct": ModelPricing(
         prompt_cost_per_token=0.10 / 1_000_000,       # $0.10/M
         completion_cost_per_token=0.10 / 1_000_000,    # $0.10/M
         search_cost_per_call=0.0,
@@ -51,7 +51,7 @@ MODEL_PRICING: dict[str, ModelPricing] = {
         search_cost_per_call=0.0,
     ),
     # Anthropic Claude Sonnet 4
-    "anthropic/claude-sonnet-4": ModelPricing(
+    "anthropic/claude-3.5-sonnet": ModelPricing(
         prompt_cost_per_token=3.00 / 1_000_000,       # $3.00/M
         completion_cost_per_token=15.00 / 1_000_000,   # $15.00/M
         search_cost_per_call=0.0,
@@ -83,7 +83,7 @@ class CostCalculator:
 
         calc = CostCalculator()
         cost = calc.calculate_cost(
-            model="anthropic/claude-sonnet-4",
+            model="anthropic/claude-3.5-sonnet",
             prompt_tokens=5000,
             completion_tokens=2000,
             search_calls=3,
