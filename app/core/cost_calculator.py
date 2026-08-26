@@ -26,6 +26,12 @@ class ModelPricing:
 # ---------------------------------------------------------------------------
 
 MODEL_PRICING: dict[str, ModelPricing] = {
+    # DeepSeek Chat — mid-tier
+    "deepseek/deepseek-chat": ModelPricing(
+        prompt_cost_per_token=0.14 / 1_000_000,       # $0.14/M
+        completion_cost_per_token=0.28 / 1_000_000,    # $0.28/M
+        search_cost_per_call=0.0,
+    ),
     # DeepSeek V4 Flash — ultra-low cost
     "deepseek/deepseek-v4-flash": ModelPricing(
         prompt_cost_per_token=0.0826 / 1_000_000,      # $0.0826/M

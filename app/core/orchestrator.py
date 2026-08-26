@@ -67,14 +67,19 @@ class Orchestrator:
         self.router = router or ModelRouter(cost_calculator=self.calculator)
         self.sandbox: DockerSandbox | None = None
 
-    async def run_task(self, task_id: str, max_iterations: int = 10) -> Task:
+    async def run_task(self, task_id: str, max_iterations: int = 10,
+                       model_override: str = "") -> Task:
         """Run the full Planner-Executor-Reviewer loop for a task.
 
+        If model_override is set, all agents use that specific model.
         Returns the updated Task object.
         """
         task = self.db.get(Task, task_id)
         if task is None:
             raise ValueError(f"Task {task_id} not found")
+
+        # Store override for step methods
+        self._model_override = model_override
 
         task.status = "running"
         self.db.add(task)
@@ -156,7 +161,7 @@ class Orchestrator:
             {"role": "user", "content": context},
         ]
 
-        result = await self.router.call_llm(messages, model, run.id, self.db)
+        result = await self.router.call_llm(messages, model, run.id, self.db, override_model=self._model_override or None)
         self._update_task_cost(task, result["cost_usd"])
         self._log(task.id, "reasoning",
                   f"[Planner iter={iteration}] {result['text'][:500]}")
@@ -189,7 +194,7 @@ class Orchestrator:
             {"role": "user", "content": context},
         ]
 
-        result = await self.router.call_llm(messages, model, run.id, self.db)
+        result = await self.router.call_llm(messages, model, run.id, self.db, override_model=self._model_override or None)
         self._update_task_cost(task, result["cost_usd"])
 
         plan = _parse_json(result["text"])
@@ -252,7 +257,7 @@ class Orchestrator:
             {"role": "user", "content": context},
         ]
 
-        result = await self.router.call_llm(messages, model, run.id, self.db)
+        result = await self.router.call_llm(messages, model, run.id, self.db, override_model=self._model_override or None)
         self._update_task_cost(task, result["cost_usd"])
 
         review = _parse_json(result["text"])

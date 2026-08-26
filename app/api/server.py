@@ -27,6 +27,7 @@ _log_queues: dict[str, list[asyncio.Queue]] = {}
 class TaskCreate(BaseModel):
     prompt: str
     target_budget_usd: float = 0.50
+    model: str = "auto"
 
 
 class TaskSummary(BaseModel):
@@ -35,6 +36,7 @@ class TaskSummary(BaseModel):
     status: str
     target_budget_usd: float | None
     total_spent_usd: float
+    model_used: str
     created_at: str
     updated_at: str
 
@@ -55,6 +57,15 @@ class CostMetricOut(BaseModel):
     cost_usd: float
 
 
+class TokenCostBreakdown(BaseModel):
+    model_name: str
+    prompt_tokens: int
+    completion_tokens: int
+    prompt_cost_usd: float
+    completion_cost_usd: float
+    total_cost_usd: float
+
+
 class LogEntry(BaseModel):
     step_type: str
     content: str
@@ -67,12 +78,16 @@ class TaskDetail(BaseModel):
     status: str
     target_budget_usd: float | None
     total_spent_usd: float
+    model_used: str
     created_at: str
     updated_at: str
     agent_runs: list[AgentRunOut]
     cost_metrics: list[CostMetricOut]
+    token_breakdown: list[TokenCostBreakdown]
     total_prompt_tokens: int
     total_completion_tokens: int
+    total_input_cost: float
+    total_output_cost: float
     execution_logs: list[LogEntry]
 
 
@@ -107,6 +122,7 @@ def _task_to_summary(task: Task) -> TaskSummary:
         id=task.id, prompt=task.prompt, status=task.status,
         target_budget_usd=task.target_budget_usd,
         total_spent_usd=task.total_spent_usd,
+        model_used=getattr(task, "model_override", "") or "",
         created_at=_dt_str(task.created_at),
         updated_at=_dt_str(task.updated_at),
     )
@@ -119,6 +135,7 @@ def _task_to_summary(task: Task) -> TaskSummary:
 @app.post("/api/tasks", response_model=TaskSummary, status_code=201)
 async def create_task(body: TaskCreate):
     """Create a new task and start the orchestrator loop in the background."""
+    model_override = body.model if body.model != "auto" else ""
     task = Task(prompt=body.prompt, target_budget_usd=body.target_budget_usd)
     with Session(engine) as sess:
         sess.add(task)
@@ -132,7 +149,7 @@ async def create_task(body: TaskCreate):
             from app.core.orchestrator import Orchestrator
             with Session(engine) as sess:
                 orch = Orchestrator(db_session=sess)
-                await orch.run_task(task_id)
+                await orch.run_task(task_id, model_override=model_override)
         except Exception as exc:
             logger.error("Task %s failed: %s", task_id, exc)
             with Session(engine) as sess:
@@ -198,10 +215,47 @@ async def get_task(task_id: str):
             .order_by(ExecutionLog.timestamp)
         ).all()
 
+        # Build per-model token cost breakdown
+        from app.core.cost_calculator import CostCalculator
+        calc = CostCalculator()
+        breakdown_by_model: dict[str, dict] = {}
+        total_input_cost = 0.0
+        total_output_cost = 0.0
+        for m in all_metrics:
+            key = m.model_name
+            if key not in breakdown_by_model:
+                breakdown_by_model[key] = {
+                    "model_name": key, "prompt_tokens": 0,
+                    "completion_tokens": 0, "prompt_cost_usd": 0.0,
+                    "completion_cost_usd": 0.0, "total_cost_usd": 0.0,
+                }
+            entry = breakdown_by_model[key]
+            entry["prompt_tokens"] += m.prompt_tokens
+            entry["completion_tokens"] += m.completion_tokens
+            if key in calc.pricing:
+                pc = m.prompt_tokens * calc.pricing[key].prompt_cost_per_token
+                cc = m.completion_tokens * calc.pricing[key].completion_cost_per_token
+            else:
+                pc = m.cost_usd * 0.3  # rough estimate
+                cc = m.cost_usd * 0.7
+            entry["prompt_cost_usd"] = round(pc, 8)
+            entry["completion_cost_usd"] = round(cc, 8)
+            entry["total_cost_usd"] = round(pc + cc, 8)
+            total_input_cost += pc
+            total_output_cost += cc
+
+        # Determine model_used from most frequent metric model
+        model_used = ""
+        if all_metrics:
+            from collections import Counter
+            counts = Counter(m.model_name for m in all_metrics)
+            model_used = counts.most_common(1)[0][0]
+
         return TaskDetail(
             id=task.id, prompt=task.prompt, status=task.status,
             target_budget_usd=task.target_budget_usd,
             total_spent_usd=task.total_spent_usd,
+            model_used=model_used,
             created_at=_dt_str(task.created_at),
             updated_at=_dt_str(task.updated_at),
             agent_runs=[AgentRunOut(
@@ -213,8 +267,11 @@ async def get_task(task_id: str):
                 model_name=m.model_name, prompt_tokens=m.prompt_tokens,
                 completion_tokens=m.completion_tokens, cost_usd=m.cost_usd,
             ) for m in all_metrics],
+            token_breakdown=[TokenCostBreakdown(**v) for v in breakdown_by_model.values()],
             total_prompt_tokens=total_pt,
             total_completion_tokens=total_ct,
+            total_input_cost=round(total_input_cost, 8),
+            total_output_cost=round(total_output_cost, 8),
             execution_logs=[LogEntry(
                 step_type=l.step_type, content=l.content,
                 timestamp=_dt_str(l.timestamp),
@@ -318,3 +375,14 @@ def broadcast_log(task_id: str, step_type: str, content: str) -> None:
             q.put_nowait(event)
         except asyncio.QueueFull:
             pass
+
+
+# ---------------------------------------------------------------------------
+# GET /api/models - Available model list
+# ---------------------------------------------------------------------------
+
+@app.get("/api/models")
+async def list_models():
+    """Return the list of available models for the UI dropdown."""
+    from app.core.router import AVAILABLE_MODELS
+    return AVAILABLE_MODELS

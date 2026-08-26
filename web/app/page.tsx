@@ -15,6 +15,7 @@ interface TaskSummary {
   status: string;
   target_budget_usd: number | null;
   total_spent_usd: number;
+  model_used: string;
   created_at: string;
   updated_at: string;
 }
@@ -28,8 +29,11 @@ interface LogEvent {
 interface TaskDetail extends TaskSummary {
   agent_runs: { id: string; agent_role: string; model_name: string; iteration: number; status: string; timestamp: string }[];
   cost_metrics: { model_name: string; prompt_tokens: number; completion_tokens: number; cost_usd: number }[];
+  token_breakdown: { model_name: string; prompt_tokens: number; completion_tokens: number; prompt_cost_usd: number; completion_cost_usd: number; total_cost_usd: number }[];
   total_prompt_tokens: number;
   total_completion_tokens: number;
+  total_input_cost: number;
+  total_output_cost: number;
   execution_logs: LogEvent[];
 }
 
@@ -44,6 +48,7 @@ const STATUS_COLORS: Record<string, string> = {
 export default function Home() {
   const [prompt, setPrompt] = useState("");
   const [budget, setBudget] = useState(0.5);
+  const [model, setModel] = useState("auto");
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [selectedTask, setSelectedTask] = useState<string | null>(null);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
@@ -113,7 +118,7 @@ export default function Home() {
       const res = await fetch(`${API}/tasks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, target_budget_usd: budget }),
+        body: JSON.stringify({ prompt, target_budget_usd: budget, model }),
       });
       if (res.ok) {
         const t: TaskSummary = await res.json();
@@ -166,6 +171,20 @@ export default function Home() {
                 value={budget}
                 onChange={(e) => setBudget(parseFloat(e.target.value) || 0)}
               />
+              <label className="text-sm text-gray-400">Model</label>
+              <select
+                className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm focus:outline-none focus:border-blue-500"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+              >
+                <option value="auto">Auto-Route (Smart)</option>
+                <option value="openai/gpt-4o-mini">GPT-4o Mini</option>
+                <option value="deepseek/deepseek-chat">DeepSeek Chat</option>
+                <option value="deepseek/deepseek-v4-flash">DeepSeek V4 Flash</option>
+                <option value="xiaomi/mimo-v2.5">Xiaomi MiMo v2.5</option>
+                <option value="anthropic/claude-sonnet-4">Claude Sonnet 4</option>
+                <option value="openai/gpt-4o">GPT-4o</option>
+              </select>
               <button
                 type="submit"
                 disabled={submitting || !prompt.trim()}
@@ -195,7 +214,14 @@ export default function Home() {
                     </span>
                   </div>
                   <div className="flex items-center justify-between mt-1">
-                    <span className="text-xs text-gray-500">${t.total_spent_usd.toFixed(4)}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">${t.total_spent_usd.toFixed(4)}</span>
+                      {t.model_used && (
+                        <span className="text-[9px] font-mono px-1 bg-gray-800 rounded text-blue-400">
+                          {t.model_used.split("/").pop()}
+                        </span>
+                      )}
+                    </div>
                     {(t.status === "running" || t.status === "pending") && (
                       <button
                         onClick={(e) => { e.stopPropagation(); handleStop(t.id); }}
@@ -220,8 +246,16 @@ export default function Home() {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">Cost Metrics</h2>
                 <div className="flex items-center gap-2">
+                  {detail.model_used && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 bg-blue-900/50 border border-blue-700/50 rounded text-blue-300">
+                      {detail.model_used}
+                    </span>
+                  )}
                   <span className="text-xs text-gray-500">
-                    {detail.total_prompt_tokens.toLocaleString()} prompt / {detail.total_completion_tokens.toLocaleString()} completion tokens
+                    In: ${detail.total_input_cost?.toFixed(6) || "0"} | Out: ${detail.total_output_cost?.toFixed(6) || "0"}
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {detail.total_prompt_tokens.toLocaleString()} in / {detail.total_completion_tokens.toLocaleString()} out tokens
                   </span>
                   {(detail.status === "running" || detail.status === "pending") && (
                     <button

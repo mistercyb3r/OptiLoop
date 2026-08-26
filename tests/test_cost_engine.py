@@ -170,7 +170,7 @@ class TestHelpers:
 
     def test_available_models(self, calculator):
         models = calculator.available_models()
-        assert len(models) == 4
+        assert len(models) == 5
         assert "anthropic/claude-sonnet-4" in models
 
     def test_custom_pricing(self):

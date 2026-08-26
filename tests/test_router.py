@@ -252,6 +252,8 @@ class TestCallLlm:
             run = self._seed_task_and_run(sess)
 
             mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.text = ""
             mock_resp.raise_for_status = MagicMock()
             mock_resp.json.return_value = {
                 "choices": [{"message": {"content": "Hello world"}}],
@@ -271,6 +273,7 @@ class TestCallLlm:
                 ))
 
             assert result["text"] == "Hello world"
+            assert result["model_used"] == "deepseek/deepseek-v4-flash"
             assert result["prompt_tokens"] == 100
             assert result["completion_tokens"] == 50
             assert result["cost_usd"] > 0
@@ -290,6 +293,8 @@ class TestCallLlm:
             run = self._seed_task_and_run(sess)
 
             mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.text = ""
             mock_resp.raise_for_status = MagicMock()
             mock_resp.json.return_value = {
                 "choices": [{"message": {"content": "ok"}}],

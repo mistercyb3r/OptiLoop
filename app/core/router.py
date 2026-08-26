@@ -19,6 +19,12 @@ _CATALOGUE_TTL = 300
 _BUDGET_DOWNGRADE_RATIO = 0.80
 
 FALLBACK_MODELS: dict[str, dict[str, Any]] = {
+    "deepseek/deepseek-chat": {
+        "prompt_price_per_token": 0.14 / 1_000_000,
+        "completion_price_per_token": 0.28 / 1_000_000,
+        "context_length": 64_000,
+        "max_completion_tokens": 8192,
+    },
     "deepseek/deepseek-v4-flash": {
         "prompt_price_per_token": 0.0826 / 1_000_000,
         "completion_price_per_token": 0.1652 / 1_000_000,
@@ -50,7 +56,23 @@ _TIER2_MODELS = {"deepseek/deepseek-v4-flash", "xiaomi/mimo-v2.5"}
 _TIER3_MODELS = {"xiaomi/mimo-v2.5", "anthropic/claude-sonnet-4"}
 
 # Verified fallback model used when any model returns 404 or errors
+DEFAULT_PLANNER_MODEL = "anthropic/claude-sonnet-4"
+DEFAULT_EXECUTOR_MODEL = "deepseek/deepseek-chat"
+DEFAULT_REVIEWER_MODEL = "deepseek/deepseek-chat"
+
+# Verified fallback model used when any model returns 404 or errors
 _FALLBACK_MODEL = "openai/gpt-4o-mini"
+
+# Models shown in the Web UI dropdown
+AVAILABLE_MODELS = [
+    {"id": "auto", "label": "Auto-Route (Smart)", "tier": "auto"},
+    {"id": "openai/gpt-4o-mini", "label": "GPT-4o Mini", "tier": "cheap"},
+    {"id": "deepseek/deepseek-chat", "label": "DeepSeek Chat", "tier": "mid"},
+    {"id": "deepseek/deepseek-v4-flash", "label": "DeepSeek V4 Flash", "tier": "cheap"},
+    {"id": "xiaomi/mimo-v2.5", "label": "Xiaomi MiMo v2.5", "tier": "mid"},
+    {"id": "anthropic/claude-sonnet-4", "label": "Claude Sonnet 4", "tier": "high"},
+    {"id": "openai/gpt-4o", "label": "GPT-4o", "tier": "high"},
+]
 
 
 @dataclass
@@ -205,26 +227,30 @@ class ModelRouter:
 
     # -- LLM execution -----------------------------------------------------
 
-    async def call_llm(self, messages, model, agent_run_id, db_session):
+    async def call_llm(self, messages, model, agent_run_id, db_session,
+                       override_model=None):
         """POST a chat-completion request and persist a CostMetric.
 
+        If override_model is set, use that model directly.
         If the primary model returns a 404 or any HTTP error, retries
         automatically with the verified fallback model (openai/gpt-4o-mini).
         """
         from app.models.db_models import CostMetric
+
+        # Use override if provided, otherwise use auto-routed model
+        effective_model = override_model or model
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
 
-        tried_models = [model]
+        tried_models = []
         last_error = None
 
-        for attempt_model in [model, _FALLBACK_MODEL]:
-            if attempt_model in tried_models and attempt_model != model:
-                # Skip if already tried (or same as original)
-                pass
+        for attempt_model in [effective_model, _FALLBACK_MODEL]:
+            if attempt_model in tried_models:
+                continue
             tried_models.append(attempt_model)
 
             payload = {"model": attempt_model, "messages": messages}
@@ -235,7 +261,13 @@ class ModelRouter:
                         OPENROUTER_CHAT_URL, json=payload,
                         headers=headers, timeout=60.0,
                     )
-                    resp.raise_for_status()
+                    if resp.status_code >= 400:
+                        error_body = resp.text[:500]
+                        logger.error(
+                            "OpenRouter %s for model %s: %s",
+                            resp.status_code, attempt_model, error_body,
+                        )
+                        resp.raise_for_status()
 
                 body = resp.json()
                 usage = body.get("usage", {})
@@ -263,14 +295,15 @@ class ModelRouter:
                 choices = body.get("choices", [])
                 text = choices[0]["message"]["content"] if choices else ""
 
-                if attempt_model != model:
+                if attempt_model != effective_model:
                     logger.warning(
                         "Model %s failed (%s) - fell back to %s",
-                        model, last_error, attempt_model,
+                        effective_model, last_error, attempt_model,
                     )
 
                 return {
                     "text": text,
+                    "model_used": attempt_model,
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
                     "cost_usd": cost,
@@ -287,6 +320,7 @@ class ModelRouter:
         logger.error("All LLM models failed for agent_run %s", agent_run_id)
         return {
             "text": "",
+            "model_used": "",
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "cost_usd": 0.0,

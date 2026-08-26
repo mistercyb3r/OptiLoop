@@ -56,6 +56,7 @@ def _mock_llm_return(text, cost=0.01):
     """Build the dict that call_llm returns."""
     return {
         "text": text,
+        "model_used": "test/model",
         "prompt_tokens": 100,
         "completion_tokens": 50,
         "cost_usd": cost,
@@ -101,7 +102,8 @@ class _FakeRouter:
                      target_budget_usd=0.0, total_spent_usd=0.0):
         return "test/model"
 
-    async def call_llm(self, messages, model, agent_run_id, db_session):
+    async def call_llm(self, messages, model, agent_run_id, db_session,
+                       override_model=None):
         role = None
         for m in messages:
             if m.get("role") == "system":
