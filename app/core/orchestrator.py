@@ -218,14 +218,23 @@ class Orchestrator:
                 if p and c:
                     self.sandbox.write_file(p, c)
                     self._log(task.id, "diff", f"Wrote file: {p}")
+                    # Persist file manifest entry so the UI can render
+                    # "Generated Files" even after the sandbox is torn down.
+                    self._log(task.id, "file",
+                              f"{p}\n{len(c)} bytes\n```\n{c[:1000]}\n```")
             elif action == "run_command":
                 cmd = item.get("command", "")
                 if cmd:
-                    cr = self.sandbox.run_command(cmd)
-                    self._log(task.id, "command",
-                              f"$ {cmd}\nexit={cr['exit_code']}"
-                              f"\nstdout={cr['stdout'][:500]}"
-                              f"\nstderr={cr['stderr'][:500]}")
+                    try:
+                        cr = self.sandbox.run_command(cmd)
+                        self._log(task.id, "command",
+                                  f"$ {cmd}\nexit={cr['exit_code']}"
+                                  f"\nstdout={cr['stdout'][:500]}"
+                                  f"\nstderr={cr['stderr'][:500]}")
+                    except Exception as exec_exc:
+                        logger.exception("Sandbox command failed: %s", cmd)
+                        self._log(task.id, "command",
+                                  f"$ {cmd}\nERROR: {exec_exc}")
 
         self._log(task.id, "diff",
                   f"[Executor iter={iteration}] {plan.get('diff_summary', '')[:500]}")
@@ -247,9 +256,7 @@ class Orchestrator:
         try:
             tr = self.sandbox.run_command("pytest tests/ -v --tb=short",
                                           timeout=120)
-            test_output = (f"exit_code={tr['exit_code']}"
-                           f"\n{tr['stdout']}"
-                           f"\n{tr['stderr']}")
+            test_output = self._format_test_failure(tr)
         except Exception as exc:
             test_output = f"Test execution error: {exc}"
 
@@ -284,6 +291,21 @@ class Orchestrator:
         return review
 
     # --- Internal helpers --------------------------------------------------
+
+    def _format_test_failure(self, tr: dict) -> str:
+        """Render a sandbox test-result dict into a clean, structured block
+        that both the Reviewer LLM and the terminal UI can consume."""
+        exit_code = tr.get("exit_code", -1)
+        stdout = (tr.get("stdout") or "").strip()
+        stderr = (tr.get("stderr") or "").strip()
+        lines = [f"EXIT CODE: {exit_code}"]
+        if stdout:
+            lines.append(f"STDOUT:\n{stdout}")
+        if stderr:
+            lines.append(f"STDERR:\n{stderr}")
+        if not stdout and not stderr:
+            lines.append("(no output)")
+        return "\n".join(lines)
 
     def _create_run(self, task_id, role, model, iteration):
         """Create and persist an AgentRun record."""
