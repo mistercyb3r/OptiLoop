@@ -1,6 +1,7 @@
 """Docker Execution Sandbox for OptiLoop."""
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import shutil
 import tempfile
@@ -66,6 +67,7 @@ class DockerSandbox:
         self.cpu_quota = cpu_quota if cpu_quota is not None else DEFAULT_CPU_QUOTA
         self.workspace = WORKSPACE_BASE / task_id
         self._container = None
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
     def start(self):
         """Pull image if needed, create workspace, start container."""
@@ -105,12 +107,22 @@ class DockerSandbox:
                     "exit_code": -1, "duration_sec": 0.0}
 
         t0 = time.time()
-        exit_code, output = self._container.exec_run(
-            ["bash", "-c", cmd],
-            workdir=CONTAINER_WORKSPACE,
-            demux=True,
-            timeout=timeout,
-        )
+        try:
+            # NOTE: the official Docker SDK exec_run() does not accept a
+            # `timeout` kwarg, so we enforce timeouts here by running the
+            # call on a thread-pool and bounding future.result().
+            future = self._executor.submit(
+                self._container.exec_run,
+                ["bash", "-c", cmd],
+                workdir=CONTAINER_WORKSPACE,
+                demux=True,
+            )
+            exit_code, output = future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            logger.warning("Command timed out after %ss: %s", timeout, cmd)
+            return {"stdout": "", "stderr": f"Command timed out after {timeout}s",
+                    "exit_code": -1, "duration_sec": round(time.time() - t0, 4)}
+
         duration = round(time.time() - t0, 4)
         stdout = output[0].decode("utf-8", errors="replace") if output[0] else ""
         stderr = output[1].decode("utf-8", errors="replace") if output[1] else ""
@@ -149,6 +161,9 @@ class DockerSandbox:
             except Exception as exc:
                 logger.warning("Container removal failed: %s", exc)
             self._container = None
+        # Release executor threads. Embedded commands that are still blocked
+        # on the docker socket are daemon threads owned by the executor.
+        self._executor.shutdown(wait=False)
         if self.workspace.exists():
             shutil.rmtree(self.workspace, ignore_errors=True)
             logger.info("Workspace %s removed", self.workspace)

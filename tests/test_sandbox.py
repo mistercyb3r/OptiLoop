@@ -1,6 +1,7 @@
 """Tests for the Docker Execution Sandbox."""
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -31,7 +32,9 @@ def _mock_container():
     c = MagicMock()
     c.short_id = "abc1234"
 
-    def exec_run(cmd, workdir=None, demux=False, timeout=None):
+    def exec_run(cmd, stdout=True, stderr=True, stdin=False, tty=False,
+                 privileged=False, user='', detach=False, stream=False,
+                 socket=False, environment=None, workdir=None, demux=False):
         if cmd == ["bash", "-c", "echo hello"]:
             return (0, (b"hello\n", None))
         if cmd == ["bash", "-c", "exit 1"]:
@@ -261,7 +264,9 @@ class TestGitDiff:
         """With no changes after init, diff is empty."""
         sandbox._container = _mock_container()
 
-        def exec_run(cmd, workdir=None, demux=False, timeout=None):
+        def exec_run(cmd, stdout=True, stderr=True, stdin=False, tty=False,
+                     privileged=False, user='', detach=False, stream=False,
+                     socket=False, environment=None, workdir=None, demux=False):
             if isinstance(cmd, list) and "git diff" in str(cmd):
                 return (0, (b"", None))
             return (0, (b"", None))
@@ -291,3 +296,54 @@ class TestSandboxConfig:
         assert s.mem_limit == "512m"
         assert s.cpu_quota == 50000
         assert s.workspace == WORKSPACE_BASE / "default_task"
+
+
+# ---------------------------------------------------------------------------
+# exec_run SDK signature & timeout handling
+# ---------------------------------------------------------------------------
+
+class TestExecRunSignature:
+
+    def test_run_command_does_not_pass_timeout_to_exec_run(self, mock_docker, sandbox):
+        """exec_run must not receive the unsupported `timeout` kwarg.
+
+        The mock's exec_run signature mirrors Docker SDK 7.2.0 exactly: it has
+        no `timeout` parameter. If sandbox.run_command passed timeout=...,
+        a TypeError would propagate and this test would fail.
+        """
+        client, container = mock_docker
+        sandbox.start()
+        result = sandbox.run_command("echo hello")
+        assert result["exit_code"] == 0
+        assert "hello" in result["stdout"]
+        call_kwargs = container.exec_run.call_args.kwargs
+        assert "timeout" not in call_kwargs
+
+    def test_run_command_timeout_returns_clean_result(self, mock_docker, sandbox):
+        """A command that exceeds the timeout returns a clean dict, not a hang."""
+        client, container = mock_docker
+        sandbox.start()
+
+        gate = threading.Event()
+
+        def blocked_exec_run(cmd, **kwargs):
+            gate.wait(timeout=10)
+            return (0, (b"", None))
+
+        container.exec_run.side_effect = blocked_exec_run
+
+        result = sandbox.run_command("sleep 30", timeout=0.2)
+        assert result["exit_code"] == -1
+        assert "timed out" in result["stderr"].lower()
+        assert result["stdout"] == ""
+        gate.set()  # release the background thread
+
+    def test_run_command_normal_execution_still_works(self, mock_docker, sandbox):
+        """Non-timeout path returns normal output dict."""
+        client, container = mock_docker
+        sandbox.start()
+        result = sandbox.run_command("echo hello")
+        assert result["exit_code"] == 0
+        assert "hello" in result["stdout"]
+        assert result["stderr"] == ""
+        assert isinstance(result["duration_sec"], float)
