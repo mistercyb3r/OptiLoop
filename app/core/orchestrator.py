@@ -53,6 +53,37 @@ def _parse_json(text: str) -> dict:
     return {}
 
 
+# Dynamic pytest discovery: prefer tests/ dir, else workspace-root test_*.py.
+_PYTEST_CMD = (
+    'if [ -d "tests" ]; then pytest tests/ -v --tb=short; '
+    'elif ls test_*.py >/dev/null 2>&1; then pytest -v --tb=short; '
+    'else echo "OptiLoop: NO TESTS FOUND"; exit 1; fi'
+)
+
+_COLLECTED_RE = re.compile(r"collected\s+(\d+)\s+items?", re.IGNORECASE)
+
+
+def _parse_pytest_collected(stdout: str) -> int:
+    """Extract the number of collected tests from pytest stdout."""
+    m = _COLLECTED_RE.search(stdout or "")
+    return int(m.group(1)) if m else 0
+
+
+def _auto_approve_if_passing(tr: dict) -> dict | None:
+    """Return an APPROVED review when pytest exited 0 with collected tests.
+
+    Returns None when tests failed (exit_code != 0) or nothing was
+    collected, so the caller falls back to the Reviewer LLM.
+    """
+    if tr.get("exit_code") != 0:
+        return None
+    collected = _parse_pytest_collected(tr.get("stdout") or "")
+    if collected > 0:
+        return {"status": "APPROVED",
+                "feedback": f"All {collected} test(s) passed."}
+    return None
+
+
 class Orchestrator:
     """Coordinates the Planner-Executor-Reviewer loop for a single task.
 
@@ -244,7 +275,11 @@ class Orchestrator:
         return plan
 
     async def _reviewer_step(self, task, iteration):
-        """Execute the reviewer agent and return approval/revision status."""
+        """Execute the reviewer agent and return approval/revision status.
+
+        Auto-approves (without an LLM call) when pytest exits 0 with at
+        least one collected test, so valid code is not rejected.
+        """
         model = self.router.select_model(
             "reviewer",
             target_budget_usd=task.target_budget_usd or 0.0,
@@ -252,13 +287,23 @@ class Orchestrator:
         )
         run = self._create_run(task.id, "reviewer", model, iteration)
 
-        test_output = ""
+        tr = {"exit_code": -1, "stdout": "", "stderr": ""}
         try:
-            tr = self.sandbox.run_command("pytest tests/ -v --tb=short",
-                                          timeout=120)
-            test_output = self._format_test_failure(tr)
+            tr = self.sandbox.run_command(_PYTEST_CMD, timeout=120)
         except Exception as exc:
-            test_output = f"Test execution error: {exc}"
+            tr = {"exit_code": -1, "stdout": "", "stderr": str(exc)}
+        test_output = self._format_test_failure(tr)
+
+        # Auto-approve short-circuit: pytest passed with tests -> no LLM call.
+        review = _auto_approve_if_passing(tr)
+        if review is not None:
+            self._log(task.id, "reasoning",
+                      f"[Reviewer iter={iteration}] status=APPROVED "
+                      f"feedback={review['feedback']}")
+            run.status = "completed"
+            self.db.add(run)
+            self.db.commit()
+            return review
 
         diff = ""
         try:

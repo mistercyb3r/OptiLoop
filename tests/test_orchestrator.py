@@ -9,7 +9,10 @@ import pytest
 from sqlmodel import SQLModel, Session, create_engine
 
 from app.models.db_models import Task, AgentRun, CostMetric, ExecutionLog
-from app.core.orchestrator import Orchestrator, _parse_json, clean_json_response
+from app.core.orchestrator import (
+    Orchestrator, _parse_json, clean_json_response,
+    _parse_pytest_collected, _auto_approve_if_passing, _PYTEST_CMD,
+)
 from app.core.router import ModelRouter
 from app.core.cost_calculator import CostCalculator
 from app.core.sandbox import DockerSandbox
@@ -168,6 +171,78 @@ class TestCleanJsonResponse:
     def test_clean_whitespace_around(self):
         text = '  \n  {"a": 1}  \n  '
         assert clean_json_response(text) == '{"a": 1}'
+
+
+class TestPytestHelpers:
+
+    def test_parse_pytest_collected(self):
+        assert _parse_pytest_collected("collected 3 items ... 3 passed in 0.01s") == 3
+        assert _parse_pytest_collected("collected 1 item ... 1 passed") == 1
+        assert _parse_pytest_collected("no tests ran") == 0
+        assert _parse_pytest_collected("") == 0
+
+    def test_auto_approve_on_exit_zero_with_tests(self):
+        review = _auto_approve_if_passing({
+            "exit_code": 0,
+            "stdout": "collected 3 items ... 3 passed in 0.01s",
+            "stderr": "",
+        })
+        assert review is not None
+        assert review["status"] == "APPROVED"
+        assert "3 test(s) passed" in review["feedback"]
+
+    def test_auto_approve_rejected_on_failure(self):
+        assert _auto_approve_if_passing({
+            "exit_code": 1,
+            "stdout": "collected 3 items ... 1 failed",
+            "stderr": "assertion error",
+        }) is None
+
+    def test_auto_approve_rejected_when_no_tests(self):
+        assert _auto_approve_if_passing({
+            "exit_code": 0,
+            "stdout": "no tests ran",
+            "stderr": "",
+        }) is None
+
+
+class TestAutoApprove:
+
+    def test_passing_pytest_auto_approves_on_iteration_1(self, db, mock_sandbox):
+        """Passing pytest (exit 0, collected>0) resolves to APPROVED on iterations 1
+        without invoking the Reviewer LLM."""
+        from app.core.orchestrator import _PYTEST_CMD
+        task = _make_task(db, "Write passing tests")
+
+        commands = []
+
+        def fake_run_command(cmd, timeout=None):
+            commands.append(cmd)
+            return {"stdout": "collected 3 items ... 3 passed in 0.01s",
+                    "stderr": "", "exit_code": 0, "duration_sec": 0.1}
+
+        mock_sandbox.run_command.side_effect = fake_run_command
+
+        router = _FakeRouter({
+            "planner": [(_plan_json(), 0.005)],
+            "executor": [(_exec_json(), 0.003)],
+        })
+
+        with patch("app.core.orchestrator.DockerSandbox", return_value=mock_sandbox):
+            with patch.object(router, "call_llm", wraps=router.call_llm) as spy:
+                orch = Orchestrator(db, router=router)
+                result = asyncio.run(orch.run_task(task.id, max_iterations=3))
+
+        assert result.status == "completed"
+        mock_sandbox.stop.assert_called_once()
+
+        # Planner + executor call the LLM; reviewer auto-approves, so no 3rd call.
+        assert spy.call_count == 2
+
+        # Reviewer pytest command is the dynamic discovery command.
+        assert any("pytest" in c for c in commands)
+        assert any("NO TESTS FOUND" in c for c in commands)
+        assert _PYTEST_CMD in commands
 
 
 # ---------------------------------------------------------------------------
