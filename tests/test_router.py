@@ -47,9 +47,9 @@ class TestCatalogue:
     def test_fallback_model_info_fields(self, router):
         cat = router._load_fallback()
         info = cat["deepseek/deepseek-v4-flash"]
-        assert info.prompt_price_per_token == pytest.approx(0.27e-6)
-        assert info.completion_price_per_token == pytest.approx(1.10e-6)
-        assert info.context_length == 128_000
+        assert info.prompt_price_per_token == pytest.approx(0.0826e-6)
+        assert info.completion_price_per_token == pytest.approx(0.1652e-6)
+        assert info.context_length == 1_048_576
 
     def test_fetch_catalogue_fallback_on_error(self, router):
         with patch("app.core.router.httpx.get", side_effect=Exception("offline")):
@@ -101,7 +101,7 @@ class TestTiers:
         assert "deepseek/deepseek-v4-flash" in tiers["1"]
         assert "openai/gpt-4o-mini" in tiers["1"]
         assert "xiaomi/mimo-v2.5" in tiers["2"]
-        assert "anthropic/claude-3.5-sonnet" in tiers["3"]
+        assert "anthropic/claude-sonnet-4" in tiers["3"]
 
     def test_dynamic_tiers_from_custom_catalogue(self):
         r = ModelRouter()
@@ -282,7 +282,7 @@ class TestCallLlm:
             assert m.model_name == "deepseek/deepseek-v4-flash"
             assert m.prompt_tokens == 100
             assert m.completion_tokens == 50
-            assert m.cost_usd == pytest.approx(0.000082, abs=1e-5)
+            assert m.cost_usd == pytest.approx(0.000017, abs=1e-5)
 
     def test_call_llm_sends_correct_payload(self, tmp_path, router):
         eng = self._make_db(tmp_path)

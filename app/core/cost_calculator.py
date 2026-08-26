@@ -28,8 +28,8 @@ class ModelPricing:
 MODEL_PRICING: dict[str, ModelPricing] = {
     # DeepSeek V4 Flash — ultra-low cost
     "deepseek/deepseek-v4-flash": ModelPricing(
-        prompt_cost_per_token=0.27 / 1_000_000,      # $0.27/M
-        completion_cost_per_token=1.10 / 1_000_000,   # $1.10/M
+        prompt_cost_per_token=0.0826 / 1_000_000,      # $0.0826/M
+        completion_cost_per_token=0.1652 / 1_000_000,   # $0.1652/M
         search_cost_per_call=0.0,
     ),
     # Xiaomi MiMo v2.5
@@ -38,8 +38,8 @@ MODEL_PRICING: dict[str, ModelPricing] = {
         completion_cost_per_token=0.56 / 1_000_000,    # $0.56/M
         search_cost_per_call=0.0,
     ),
-    # Anthropic Claude 3.5 Sonnet
-    "anthropic/claude-3.5-sonnet": ModelPricing(
+    # Anthropic Claude Sonnet 4
+    "anthropic/claude-sonnet-4": ModelPricing(
         prompt_cost_per_token=3.00 / 1_000_000,       # $3.00/M
         completion_cost_per_token=15.00 / 1_000_000,   # $15.00/M
         search_cost_per_call=0.0,
@@ -68,7 +68,7 @@ class CostCalculator:
 
         calc = CostCalculator()
         cost = calc.calculate_cost(
-            model="anthropic/claude-3.5-sonnet",
+            model="anthropic/claude-sonnet-4",
             prompt_tokens=5000,
             completion_tokens=2000,
             search_calls=3,
@@ -96,7 +96,7 @@ class CostCalculator:
         """Return the exact USD cost for the given usage.
 
         Args:
-            model: Model identifier (e.g. ``"anthropic/claude-3.5-sonnet"``).
+            model: Model identifier (e.g. ``"anthropic/claude-sonnet-4"``).
             prompt_tokens: Number of tokens in the prompt.
             completion_tokens: Number of tokens in the completion.
             search_calls: Number of search / tool-calls made.

@@ -54,7 +54,7 @@ class TestDatabaseInitialization:
         session.commit()
         session.refresh(task)
         run = AgentRun(task_id=task.id, agent_role="executor",
-                       model_name="anthropic/claude-3.5-sonnet", iteration=1)
+                       model_name="anthropic/claude-sonnet-4", iteration=1)
         session.add(run)
         session.commit()
         session.refresh(run)
@@ -100,17 +100,17 @@ class TestCostCalculation:
         cost = calculator.calculate_cost(
             "deepseek/deepseek-v4-flash", 1_000_000, 1_000_000
         )
-        # 1M * $0.27/M + 1M * $1.10/M = $1.37
-        assert cost == pytest.approx(1.37, abs=1e-6)
+        # 1M * $0.0826/M + 1M * $0.1652/M = $0.2478
+        assert cost == pytest.approx(0.2478, abs=1e-4)
 
     def test_xiaomi_mimo_v25(self, calculator):
         cost = calculator.calculate_cost("xiaomi/mimo-v2.5", 2_000_000, 500_000)
         # 2M * $0.14/M + 0.5M * $0.56/M = $0.56
         assert cost == pytest.approx(0.56, abs=1e-6)
 
-    def test_claude_35_sonnet(self, calculator):
+    def test_claude_sonnet_4(self, calculator):
         cost = calculator.calculate_cost(
-            "anthropic/claude-3.5-sonnet", 5000, 2000
+            "anthropic/claude-sonnet-4", 5000, 2000
         )
         # 5000*$3/M + 2000*$15/M = $0.015 + $0.03 = $0.045
         assert cost == pytest.approx(0.045, abs=1e-6)
@@ -171,7 +171,7 @@ class TestHelpers:
     def test_available_models(self, calculator):
         models = calculator.available_models()
         assert len(models) == 4
-        assert "anthropic/claude-3.5-sonnet" in models
+        assert "anthropic/claude-sonnet-4" in models
 
     def test_custom_pricing(self):
         custom = {"m": ModelPricing(1.0 / 1e6, 2.0 / 1e6, 0.0)}
@@ -189,17 +189,17 @@ class TestIntegration:
 
         run = AgentRun(
             task_id=task.id, agent_role="executor",
-            model_name="anthropic/claude-3.5-sonnet",
+            model_name="anthropic/claude-sonnet-4",
         )
         session.add(run)
         session.commit()
         session.refresh(run)
 
         cost = calculator.calculate_cost(
-            "anthropic/claude-3.5-sonnet", 5000, 2000
+            "anthropic/claude-sonnet-4", 5000, 2000
         )
         metric = CostMetric(
-            agent_run_id=run.id, model_name="anthropic/claude-3.5-sonnet",
+            agent_run_id=run.id, model_name="anthropic/claude-sonnet-4",
             prompt_tokens=5000, completion_tokens=2000,
             search_calls=0, cost_usd=cost,
         )

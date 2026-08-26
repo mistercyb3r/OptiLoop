@@ -20,9 +20,9 @@ _BUDGET_DOWNGRADE_RATIO = 0.80
 
 FALLBACK_MODELS: dict[str, dict[str, Any]] = {
     "deepseek/deepseek-v4-flash": {
-        "prompt_price_per_token": 0.27 / 1_000_000,
-        "completion_price_per_token": 1.10 / 1_000_000,
-        "context_length": 128_000,
+        "prompt_price_per_token": 0.0826 / 1_000_000,
+        "completion_price_per_token": 0.1652 / 1_000_000,
+        "context_length": 1_048_576,
         "max_completion_tokens": 8192,
     },
     "xiaomi/mimo-v2.5": {
@@ -31,7 +31,7 @@ FALLBACK_MODELS: dict[str, dict[str, Any]] = {
         "context_length": 128_000,
         "max_completion_tokens": 8192,
     },
-    "anthropic/claude-3.5-sonnet": {
+    "anthropic/claude-sonnet-4": {
         "prompt_price_per_token": 3.00 / 1_000_000,
         "completion_price_per_token": 15.00 / 1_000_000,
         "context_length": 200_000,
@@ -47,7 +47,10 @@ FALLBACK_MODELS: dict[str, dict[str, Any]] = {
 
 _TIER1_MODELS = {"deepseek/deepseek-v4-flash", "openai/gpt-4o-mini"}
 _TIER2_MODELS = {"deepseek/deepseek-v4-flash", "xiaomi/mimo-v2.5"}
-_TIER3_MODELS = {"xiaomi/mimo-v2.5", "anthropic/claude-3.5-sonnet"}
+_TIER3_MODELS = {"xiaomi/mimo-v2.5", "anthropic/claude-sonnet-4"}
+
+# Verified fallback model used when any model returns 404 or errors
+_FALLBACK_MODEL = "openai/gpt-4o-mini"
 
 
 @dataclass
@@ -203,51 +206,88 @@ class ModelRouter:
     # -- LLM execution -----------------------------------------------------
 
     async def call_llm(self, messages, model, agent_run_id, db_session):
-        """POST a chat-completion request and persist a CostMetric."""
+        """POST a chat-completion request and persist a CostMetric.
+
+        If the primary model returns a 404 or any HTTP error, retries
+        automatically with the verified fallback model (openai/gpt-4o-mini).
+        """
         from app.models.db_models import CostMetric
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        payload = {"model": model, "messages": messages}
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                OPENROUTER_CHAT_URL, json=payload,
-                headers=headers, timeout=60.0,
-            )
-            resp.raise_for_status()
+        tried_models = [model]
+        last_error = None
 
-        body = resp.json()
-        usage = body.get("usage", {})
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
+        for attempt_model in [model, _FALLBACK_MODEL]:
+            if attempt_model in tried_models and attempt_model != model:
+                # Skip if already tried (or same as original)
+                pass
+            tried_models.append(attempt_model)
 
-        cost = self.calculator.calculate_cost(
-            model=model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
+            payload = {"model": attempt_model, "messages": messages}
 
-        metric = CostMetric(
-            agent_run_id=agent_run_id,
-            model_name=model,
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            search_calls=0,
-            cost_usd=cost,
-        )
-        db_session.add(metric)
-        db_session.commit()
-        db_session.refresh(metric)
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        OPENROUTER_CHAT_URL, json=payload,
+                        headers=headers, timeout=60.0,
+                    )
+                    resp.raise_for_status()
 
-        choices = body.get("choices", [])
-        text = choices[0]["message"]["content"] if choices else ""
+                body = resp.json()
+                usage = body.get("usage", {})
+                prompt_tokens = usage.get("prompt_tokens", 0)
+                completion_tokens = usage.get("completion_tokens", 0)
 
+                cost = self.calculator.calculate_cost(
+                    model=attempt_model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
+
+                metric = CostMetric(
+                    agent_run_id=agent_run_id,
+                    model_name=attempt_model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    search_calls=0,
+                    cost_usd=cost,
+                )
+                db_session.add(metric)
+                db_session.commit()
+                db_session.refresh(metric)
+
+                choices = body.get("choices", [])
+                text = choices[0]["message"]["content"] if choices else ""
+
+                if attempt_model != model:
+                    logger.warning(
+                        "Model %s failed (%s) - fell back to %s",
+                        model, last_error, attempt_model,
+                    )
+
+                return {
+                    "text": text,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "cost_usd": cost,
+                }
+
+            except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+                last_error = str(exc)
+                logger.warning(
+                    "LLM call failed for %s: %s", attempt_model, last_error,
+                )
+                continue
+
+        # All attempts failed — return empty result instead of crashing
+        logger.error("All LLM models failed for agent_run %s", agent_run_id)
         return {
-            "text": text,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "cost_usd": cost,
+            "text": "",
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "cost_usd": 0.0,
         }
