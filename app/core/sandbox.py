@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import io
 import logging
 import shutil
 import tempfile
@@ -14,6 +15,15 @@ import docker as docker_sdk
 logger = logging.getLogger(__name__)
 
 DOCKER_IMAGE = "python:3.11-slim"
+
+# Locally-built sandbox image with testing dependencies pre-installed.
+# Built on first use (host-wide cache), falling back to DOCKER_IMAGE if
+# image building is unavailable (offline / constrained hosts).
+SANDBOX_IMAGE_NAME = "optiloop-sandbox:latest"
+SANDBOX_DOCKERFILE = (
+    f"FROM {DOCKER_IMAGE}\n"
+    "RUN pip install --no-cache-dir pytest pytest-cov\n"
+)
 WORKSPACE_BASE = Path(tempfile.gettempdir()) / "optiloop_workspaces"
 CONTAINER_WORKSPACE = "/workspace"
 KEEPALIVE_CMD = ["tail", "-f", "/dev/null"]
@@ -67,21 +77,54 @@ class DockerSandbox:
         self.cpu_quota = cpu_quota if cpu_quota is not None else DEFAULT_CPU_QUOTA
         self.workspace = WORKSPACE_BASE / task_id
         self._container = None
+        self._image_used = None
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
-    def start(self):
-        """Pull image if needed, create workspace, start container."""
-        client = docker_sdk.from_env()
-        self.workspace.mkdir(parents=True, exist_ok=True)
+    def _ensure_image(self, client):
+        """Return an image tag with pytest pre-installed.
 
+        Prefers the locally-built optiloop-sandbox:latest tag. If absent,
+        builds it from self.image; if the build fails (offline / no build
+        support), falls back to pulling/running the base self.image.
+        """
+        # 1) Already-built sandbox image exists on the host.
+        try:
+            client.images.get(SANDBOX_IMAGE_NAME)
+            return SANDBOX_IMAGE_NAME
+        except docker_sdk.errors.ImageNotFound:
+            pass
+
+        # 2) Build optiloop-sandbox:latest from python:3.11-slim + pytest.
+        logger.info("Building sandbox image %s ...", SANDBOX_IMAGE_NAME)
+        try:
+            client.images.build(
+                fileobj=io.BytesIO(SANDBOX_DOCKERFILE.encode("utf-8")),
+                tag=SANDBOX_IMAGE_NAME,
+                rm=True,
+            )
+            return SANDBOX_IMAGE_NAME
+        except Exception as exc:
+            logger.warning("Sandbox image build failed (%s); falling back to %s",
+                           exc, self.image)
+
+        # 3) Last resort: ensure the bare base image is present.
         try:
             client.images.get(self.image)
         except docker_sdk.errors.ImageNotFound:
             logger.info("Pulling image %s ...", self.image)
             client.images.pull(self.image)
+        return self.image
+
+    def start(self):
+        """Build/prepare sandbox image, create workspace, start container."""
+        client = docker_sdk.from_env()
+        self.workspace.mkdir(parents=True, exist_ok=True)
+
+        image = self._ensure_image(client)
+        self._image_used = image
 
         self._container = client.containers.run(
-            self.image,
+            image,
             command=KEEPALIVE_CMD,
             detach=True,
             volumes={str(self.workspace): {"bind": CONTAINER_WORKSPACE, "mode": "rw"}},
@@ -92,7 +135,8 @@ class DockerSandbox:
             security_opt=["no-new-privileges"],
             auto_remove=False,
         )
-        logger.info("Container %s started for task %s", self._container.short_id, self.task_id)
+        logger.info("Container %s started for task %s (image=%s)",
+                    self._container.short_id, self.task_id, self._image_used)
 
     def run_command(self, cmd, timeout=None):
         """Execute cmd inside the container. Returns dict with output details."""

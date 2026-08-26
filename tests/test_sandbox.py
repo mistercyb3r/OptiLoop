@@ -147,15 +147,15 @@ class TestCommandSafety:
 
 class TestLifecycle:
 
-    def test_start_pulls_image_if_missing(self, tmp_path):
-        """start() should pull image when not found locally."""
+    def test_start_builds_sandbox_image_when_missing(self, tmp_path):
+        """start() should build optiloop-sandbox:latest when it is absent."""
         import app.core.sandbox as sb_mod
 
         mock_client = MagicMock()
         mock_container = _mock_container()
         mock_client.containers.run.return_value = mock_container
         img_not_found = type("ImageNotFound", (Exception,), {})
-        mock_client.images.get.side_effect = img_not_found
+        mock_client.images.get.side_effect = img_not_found  # get() misses
 
         with patch.object(sb_mod, "docker_sdk") as dm:
             dm.from_env.return_value = mock_client
@@ -166,12 +166,43 @@ class TestLifecycle:
             s.workspace = tmp_path / "pull_test"
             s.start()
 
-            mock_client.images.pull.assert_called_once_with("python:3.11-slim")
-            mock_client.containers.run.assert_called_once()
+            mock_client.images.build.assert_called_once()
+            # Container runs on the locally-built sandbox tag
+            assert mock_client.containers.run.call_args[0][0] == "optiloop-sandbox:latest"
             call_kwargs = mock_client.containers.run.call_args[1]
             assert call_kwargs["detach"] is True
             assert call_kwargs["mem_limit"] == "512m"
             assert call_kwargs["privileged"] is False
+
+    def test_start_falls_back_to_pull_when_build_fails(self, tmp_path):
+        """If image build raises, fall back to pulling/using the base image."""
+        import app.core.sandbox as sb_mod
+
+        mock_client = MagicMock()
+        mock_container = _mock_container()
+        mock_client.containers.run.return_value = mock_container
+        img_not_found = type("ImageNotFound", (Exception,), {})
+        mock_client.images.get.side_effect = img_not_found  # both get() calls miss
+        mock_client.images.build.side_effect = Exception("build unsupported")
+
+        with patch.object(sb_mod, "docker_sdk") as dm:
+            dm.from_env.return_value = mock_client
+            dm.errors = MagicMock()
+            dm.errors.ImageNotFound = img_not_found
+
+            s = DockerSandbox("fallback_test")
+            s.workspace = tmp_path / "fallback_test"
+            s.start()
+
+            mock_client.images.pull.assert_called_once_with("python:3.11-slim")
+            assert mock_client.containers.run.call_args[0][0] == "python:3.11-slim"
+
+    def test_sandbox_dockerfile_installs_pytest(self):
+        """The sandbox image must pre-install pytest and pytest-cov."""
+        from app.core.sandbox import SANDBOX_DOCKERFILE, DOCKER_IMAGE
+        assert DOCKER_IMAGE in SANDBOX_DOCKERFILE
+        assert "pytest" in SANDBOX_DOCKERFILE
+        assert "pytest-cov" in SANDBOX_DOCKERFILE
 
     def test_start_creates_container(self, mock_docker, sandbox):
         """start() should create a running container."""
