@@ -1,0 +1,35 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: optiloop-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - optiloop-data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /tmp/optiloop_workspaces:/tmp/optiloop_workspaces
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: optiloop-web
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - OPTILOOP_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  optiloop-data:

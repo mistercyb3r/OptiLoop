@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+sqlmodel
+pydantic
+pytest
+httpx
+docker
+sse-starlette
+typer
+rich
